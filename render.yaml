@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: viltrix-ai-lab-universal
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
