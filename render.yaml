@@ -1,7 +1,6 @@
 services:
   - type: web
-    name: viltrix-ai-lab-universal
-    runtime: node
-    plan: free
+    name: viltrix-ai-lab-backend
+    env: node
     buildCommand: npm install
     startCommand: npm start
