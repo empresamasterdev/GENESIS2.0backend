@@ -1,10 +1,155 @@
-import express from 'express';import cors from 'cors';import crypto from 'node:crypto';
-const app=express(),PORT=process.env.PORT||10000,runs=new Map();app.use(cors());app.use(express.json({limit:'1mb'}));
-function load(){let a=[];for(const p of ['groq','mistral','openai']){let P=p.toUpperCase();for(let i=1;i<=20;i++){let k=process.env[`${P}_API_KEY_${i}`],m=process.env[`${P}_MODEL_${i}`];if(k&&m)a.push({id:`${p}-${i}`,provider:p,key:k,model:m})}let k=process.env[`${P}_API_KEY`],m=process.env[`${P}_MODEL`];if(k&&m)a.push({id:`${p}-default`,provider:p,key:k,model:m})}return a}const con=load(),now=()=>new Date().toISOString(),rid=()=>crypto.randomUUID();function ev(r,type,message,level=''){r.events.push({at:now(),type,message,level})}
-function prompt(role,cmd,ctx){const roleText={NEXUS:'Interpret the command and create a precise plan. Do not claim actions not performed.',SCOUT:'Investigate using only supplied context. Identify concrete files, dependencies, risks and evidence. Do not invent repository facts.',FORGE:'Design exact code/file changes from supplied context. This is a sandbox; do not claim real GitHub files were changed.',SENTINEL:'Review all previous outputs for correctness and completeness. Only complete when evidence is coherent. Produce the final operational GitHub signal.'}[role];return `${roleText}\n\nUSER COMMAND:\n${cmd}\n\nPREVIOUS CONTEXT:\n${JSON.stringify(ctx)}\n\nReturn JSON only: status, summary, findings, changes, nextContext, githubAction. status=completed or failed. SENTINEL must provide githubAction when complete.`}
-async function call(c,p){let u,h,b,t=Date.now();if(c.provider==='groq'){u='https://api.groq.com/openai/v1/chat/completions';h={Authorization:`Bearer ${c.key}`,'Content-Type':'application/json'}}else if(c.provider==='mistral'){u='https://api.mistral.ai/v1/chat/completions';h={Authorization:`Bearer ${c.key}`,'Content-Type':'application/json'}}else{u='https://api.openai.com/v1/chat/completions';h={Authorization:`Bearer ${c.key}`,'Content-Type':'application/json'}}b={model:c.model,messages:[{role:'user',content:p}],temperature:0};let r=await fetch(u,{method:'POST',headers:h,body:JSON.stringify(b)}),raw=await r.text(),lat=Date.now()-t;if(!r.ok)throw Object.assign(Error(`Provider ${r.status}: ${raw.slice(0,800)}`),{status:r.status});let d;try{d=JSON.parse(raw)}catch{throw Error('Provider returned invalid JSON')}return{content:d.choices?.[0]?.message?.content||'',raw:d,usage:d.usage||{},lat}}
-function parse(x){try{return JSON.parse(x)}catch{let a=x.indexOf('{'),b=x.lastIndexOf('}');if(a>=0&&b>a)try{return JSON.parse(x.slice(a,b+1))}catch{}return{status:'completed',summary:x,findings:[],changes:[],nextContext:{raw:x},githubAction:null}}}
-async function agent(r,n,mid,ctx){let c=con.find(x=>x.id===mid);if(!c)throw Error(`${n}: modelo não encontrado`);let a=r.agents.find(x=>x.name===n);a.status='working';a.provider=c.provider;a.model=c.model;ev(r,`${n}_STARTED`,`${n} iniciou com ${c.provider}/${c.model}`,'ok');let o=await call(c,prompt(n,r.command,ctx)),p=parse(o.content),u=o.usage||{};r.metrics.calls++;r.metrics.inputTokens+=u.prompt_tokens||u.input_tokens||0;r.metrics.outputTokens+=u.completion_tokens||u.output_tokens||0;r.metrics.totalTokens+=u.total_tokens??((u.prompt_tokens||u.input_tokens||0)+(u.completion_tokens||u.output_tokens||0));r.metrics.latencyMs+=o.lat;r.outputs[n]={provider:c.provider,model:c.model,response:p,raw:o.raw};a.status=p.status==='failed'?'failed':'completed';a.detail=p.summary||'resposta recebida';ev(r,`${n}_${a.status==='failed'?'FAILED':'COMPLETED'}`,a.detail,a.status==='failed'?'bad':'ok');if(a.status==='failed')throw Error(`${n} marcou a etapa como failed`);return p.nextContext||p}
-function github(sig,r){if(!sig){ev(r,'GITHUB_SIGNAL_MISSING','SENTINEL não produziu githubAction.','bad');return{received:false,error:'githubAction ausente'}}if(typeof sig!=='object'||Array.isArray(sig)){ev(r,'GITHUB_SIGNAL_INVALID','githubAction inválido.','bad');return{received:false,error:'githubAction inválido'}}ev(r,'GITHUB_SIGNAL_SENT','Sinal produzido pelo SENTINEL entregue ao GitHub Simulator.','ok');if(!Object.hasOwn(sig,'action')){ev(r,'GITHUB_SIGNAL_REJECTED','Simulator rejeitou o sinal: action ausente.','bad');return{received:false,error:'action ausente',signal:sig}}ev(r,'GITHUB_SIGNAL_RECEIVED','GitHub Simulator confirmou o sinal.','ok');return{received:true,receivedAt:now(),signal:sig}}
-async function exec(r){try{let ctx={};for(const n of ['NEXUS','SCOUT','FORGE','SENTINEL'])ctx=await agent(r,n,r.team[n],ctx);ev(r,'FINAL_SIGNAL_CREATED','SENTINEL produziu o sinal operacional final.','ok');r.github=github(r.outputs.SENTINEL.response?.githubAction,r);if(!r.github.received)throw Error('GitHub Simulator não confirmou o sinal final');r.status='completed';ev(r,'SIMULATION_COMPLETED','Fluxo completo concluído.','ok')}catch(e){r.status='failed';r.error={message:e.message,status:e.status||null};ev(r,'EXECUTION_FAILED',e.message,'bad')}finally{r.finishedAt=now()}}
-app.get('/health',(q,s)=>s.json({ok:true,service:'VILTRIX AI LAB',version:'5.0.0',connections:con.length}));app.get('/api/models',(q,s)=>s.json({models:con.map(c=>({id:c.id,connectionId:c.id,provider:c.provider,model:c.model,capabilities:[/code|codestral/i.test(c.model)?'code':'text']}))}));app.get('/api/runs',(q,s)=>s.json({runs:[...runs.values()].sort((a,b)=>b.createdAt.localeCompare(a.createdAt))}));app.get('/api/runs/:id',(q,s)=>{let r=runs.get(q.params.id);if(!r)return s.status(404).json({error:'run not found'});s.json(r)});app.post('/api/sandbox/run',(q,s)=>{let{command,team}=q.body||{};if(typeof command!=='string'||!command.trim())return s.status(400).json({error:'command is required'});for(const n of ['NEXUS','SCOUT','FORGE','SENTINEL'])if(!con.some(c=>c.id===team?.[n]))return s.status(400).json({error:`modelo inválido para ${n}`});let r={id:rid(),createdAt:now(),command:command.trim(),team,status:'running',agents:['NEXUS','SCOUT','FORGE','SENTINEL'].map(n=>{let c=con.find(x=>x.id===team[n]);return{name:n,status:'waiting',provider:c.provider,model:c.model,detail:''}}),events:[],outputs:{},github:null,error:null,finishedAt:null,metrics:{calls:0,inputTokens:0,outputTokens:0,totalTokens:0,latencyMs:0}};runs.set(r.id,r);ev(r,'TASK_CREATED','Sandbox task criada.','ok');exec(r);s.status(202).json({runId:r.id,status:r.status})});app.get('/api/power-rank',(q,s)=>{let m=new Map();for(let r of runs.values())for(let a of r.agents){let k=`${a.provider}:${a.model}`,x=m.get(k)||{provider:a.provider,model:a.model,experiments:0,completed:0,totalTokens:0,latencies:[]};x.experiments++;if(r.status==='completed')x.completed++;x.totalTokens+=r.metrics.totalTokens;x.latencies.push(r.metrics.latencyMs);m.set(k,x)}s.json({rank:[...m.values()].map(x=>({...x,avgLatencyMs:x.latencies.length?Math.round(x.latencies.reduce((a,b)=>a+b,0)/x.latencies.length):0})).sort((a,b)=>b.completed-a.completed||a.avgLatencyMs-b.avgLatencyMs)})});app.listen(PORT,()=>console.log(`VILTRIX AI LAB 5.0.0 REAL SANDBOX on ${PORT}`));
+import express from "express";
+import cors from "cors";
+import crypto from "node:crypto";
+
+const app=express();
+app.use(cors());
+app.use(express.json({limit:"2mb"}));
+
+const runs=new Map();
+const connections=new Map();
+const providers=new Map([
+ ["groq",{base:"https://api.groq.com/openai/v1",models:"/models",chat:"/chat/completions"}],
+ ["mistral",{base:"https://api.mistral.ai/v1",models:"/models",chat:"/chat/completions"}],
+ ["openai",{base:"https://api.openai.com/v1",models:"/models",chat:"/chat/completions"}],
+ ["anthropic",{base:"https://api.anthropic.com/v1",models:null,chat:"/messages"}]
+]);
+
+function id(p="id"){return p+"_"+crypto.randomUUID().replaceAll("-","").slice(0,16)}
+function now(){return new Date().toISOString()}
+function log(r,type,stage,message,extra={}){r.events.push({ts:now(),type,stage,message,...extra})}
+function cap(name=""){let n=name.toLowerCase(); if(/code|codestral|coder|dev|program/.test(n))return "code"; if(/vision|vl|pixtral|image/.test(n))return "vision"; if(/audio|whisper|speech/.test(n))return "audio"; if(/embed/.test(n))return "embedding"; if(/reason|thinking|r1|o1|o3|gpt-oss/.test(n))return "reasoning"; return "text"}
+function modelKey(c,m){return `${c.id}::${c.provider}::${m}`}
+
+async function fetchJson(url,opt={}){let res=await fetch(url,opt);let text=await res.text();let data;try{data=JSON.parse(text)}catch{data={raw:text}}if(!res.ok)throw new Error(data?.error?.message||data?.message||`HTTP ${res.status}`);return data}
+
+async function detectProvider(key,requested="auto"){
+ if(requested&&requested!=="auto")return requested;
+ const tests=[["groq","https://api.groq.com/openai/v1/models",{"Authorization":`Bearer ${key}`}],["openai","https://api.openai.com/v1/models",{"Authorization":`Bearer ${key}`}],["mistral","https://api.mistral.ai/v1/models",{"Authorization":`Bearer ${key}`}]];
+ for(const [p,u,h] of tests){try{await fetchJson(u,{headers:h});return p}catch{}}
+ throw new Error("Não foi possível detectar o provedor automaticamente.");
+}
+async function discover(c){
+ if(c.provider==="anthropic"){
+   // Anthropic does not expose the same public model-list endpoint; use configured discovery candidates only after key validation.
+   // This is not a fake model result: each candidate is validated with a real API call.
+   const candidates=["claude-3-5-haiku-latest","claude-3-5-sonnet-latest","claude-3-7-sonnet-latest"];
+   const out=[];
+   for(const model of candidates){try{
+      const x=await fetchJson("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"x-api-key":c.key,"anthropic-version":"2023-06-01","content-type":"application/json"},body:JSON.stringify({model,max_tokens:1,messages:[{role:"user",content:"ping"}]})});
+      if(x)out.push({model,provider:"anthropic",capability:cap(model),connectionId:c.id,connectionName:c.name});
+   }catch{}}
+   return out;
+ }
+ const p=providers.get(c.provider);
+ const d=await fetchJson(p.base+p.models,{headers:{Authorization:`Bearer ${c.key}`}});
+ return (d.data||[]).map(x=>({model:x.id,provider:c.provider,capability:cap(x.id),connectionId:c.id,connectionName:c.name}));
+}
+async function callModel(c,model,messages){
+ const p=providers.get(c.provider); const t=Date.now();
+ if(c.provider==="anthropic"){
+   const d=await fetchJson(p.base+p.chat,{method:"POST",headers:{"x-api-key":c.key,"anthropic-version":"2023-06-01","content-type":"application/json"},body:JSON.stringify({model,max_tokens:2500,temperature:0,messages})});
+   return {text:(d.content||[]).map(x=>x.text||"").join(""),usage:{input_tokens:d.usage?.input_tokens||0,output_tokens:d.usage?.output_tokens||0,total_tokens:(d.usage?.input_tokens||0)+(d.usage?.output_tokens||0)},latencyMs:Date.now()-t,raw:d};
+ }
+ const d=await fetchJson(p.base+p.chat,{method:"POST",headers:{Authorization:`Bearer ${c.key}`,"content-type":"application/json"},body:JSON.stringify({model,messages,temperature:0})});
+ const u=d.usage||{};
+ return {text:d.choices?.[0]?.message?.content||"",usage:{input_tokens:u.prompt_tokens||u.input_tokens||0,output_tokens:u.completion_tokens||u.output_tokens||0,total_tokens:u.total_tokens||(u.prompt_tokens||u.input_tokens||0)+(u.completion_tokens||u.output_tokens||0)},latencyMs:Date.now()-t,raw:d};
+}
+function stagePrompt(stage,command,previous){
+ const common=`Você é a etapa ${stage} de um pipeline de engenharia de software. Execute somente o papel da sua etapa. Comando do usuário:\n${command}\n\nContexto produzido pelas etapas anteriores:\n${previous||"(nenhum)"}`;
+ if(stage==="NEXUS")return common+"\nDefina intenção, requisitos, riscos e plano objetivo. Não invente dados.";
+ if(stage==="SCOUT")return common+"\nInvestigue o contexto disponível, identifique arquivos/áreas relevantes e dependências. Não escreva código nem alegue acesso a arquivos que não recebeu.";
+ if(stage==="FORGE")return common+"\nProponha as alterações de código/SQL necessárias com artefatos estruturados. Só use informações presentes no contexto.";
+ return common+"\nRevise o trabalho anterior, valide coerência e produza uma decisão final operacional. Se estiver tudo correto, gere githubAction com action e lista de alterações propostas. Não alegue que algo foi aplicado no GitHub real.";
+}
+
+app.get("/health",(req,res)=>res.json({ok:true,version:"6.0.0",name:"VILTRIX AI LAB REAL SANDBOX"}));
+app.get("/api/models",(req,res)=>{
+ const models=[];
+ for(const c of connections.values())for(const m of c.models||[])models.push(m);
+ res.json({models});
+});
+app.get("/api/connections",(req,res)=>res.json({connections:[...connections.values()].map(c=>({id:c.id,name:c.name,provider:c.provider,models:c.models||[]}))}));
+
+app.post("/api/connections",async(req,res)=>{
+ try{
+   const key=String(req.body.key||"").trim(), requested=String(req.body.provider||"auto"), name=String(req.body.name||"Conexão").trim();
+   if(!key)throw Error("API key ausente.");
+   const provider=await detectProvider(key,requested);
+   const c={id:id("conn"),name,provider,key,models:[]};
+   c.models=await discover(c);
+   connections.set(c.id,c);
+   res.json({connection:{id:c.id,name:c.name,provider:c.provider},models:c.models});
+ }catch(e){res.status(400).json({error:e.message})}
+});
+
+app.post("/api/sandbox/run",async(req,res)=>{
+ const command=String(req.body.command||"").trim(), team=req.body.team||{};
+ if(!command)return res.status(400).json({error:"Comando vazio."});
+ for(const s of ["NEXUS","SCOUT","FORGE","SENTINEL"]){if(!team[s]?.model||!team[s]?.connectionId)return res.status(400).json({error:`Modelo ausente em ${s}.`})}
+ const r={id:id("run"),command,team,status:"running",createdAt:now(),events:[],stageResults:{},githubSignal:null,githubReceived:false};
+ runs.set(r.id,r); log(r,"TASK_CREATED","","Execução criada");
+ executeRun(r).catch(e=>{r.status="failed";log(r,"EXECUTION_FAILED","",e.message)});
+ res.json({run:{id:r.id,status:r.status}});
+});
+
+async function executeRun(r){
+ let previous="";
+ for(const stage of ["NEXUS","SCOUT","FORGE","SENTINEL"]){
+   const sel=r.team[stage], c=connections.get(sel.connectionId);
+   if(!c)throw Error(`Conexão ${sel.connectionId} não encontrada.`);
+   const found=(c.models||[]).find(x=>x.model===sel.model);
+   if(!found)throw Error(`Modelo ${sel.model} não pertence à conexão selecionada.`);
+   r.stageResults[stage]={status:"running",model:sel.model,provider:c.provider,startedAt:now()};
+   log(r,"STAGE_STARTED",stage,`Modelo ${sel.model}`);
+   try{
+     const result=await callModel(c,sel.model,[{role:"user",content:stagePrompt(stage,r.command,previous)}]);
+     r.stageResults[stage]={...r.stageResults[stage],status:"completed",completedAt:now(),latencyMs:result.latencyMs,usage:result.usage,output:result.text,raw:result.raw};
+     previous=result.text;
+     log(r,"STAGE_COMPLETED",stage,`Concluído`,{tokens:result.usage.total_tokens,latencyMs:result.latencyMs});
+     if(stage==="SENTINEL"){
+       let parsed=null;try{parsed=JSON.parse(result.text)}catch{}
+       r.githubSignal=parsed?.githubAction||{action:"review",status:"proposed",payload:result.text};
+       log(r,"FINAL_SIGNAL_CREATED","SENTINEL","Sinal final produzido pelo modelo");
+       const received=githubSimulator(r.githubSignal);
+       r.githubReceived=received.ok;
+       log(r,received.ok?"GITHUB_SIGNAL_RECEIVED":"GITHUB_SIGNAL_REJECTED","GITHUB",received.message);
+     }
+   }catch(e){
+     r.stageResults[stage]={...r.stageResults[stage],status:"failed",completedAt:now(),error:e.message};
+     log(r,"STAGE_FAILED",stage,e.message);r.status="failed";return;
+   }
+ }
+ r.status=r.githubReceived?"completed":"failed";
+ log(r,r.status==="completed"?"SIMULATION_COMPLETED":"SIMULATION_FAILED","","Fluxo encerrado");
+}
+function githubSimulator(signal){
+ if(!signal||typeof signal!=="object")return {ok:false,message:"Sinal não é objeto."};
+ if(typeof signal.action!=="string"||!signal.action.trim())return {ok:false,message:"Sinal sem action válida."};
+ return {ok:true,message:`Protocolo aceito: action=${signal.action}`};
+}
+
+app.get("/api/runs",(req,res)=>res.json({runs:[...runs.values()].sort((a,b)=>String(b.createdAt).localeCompare(String(a.createdAt))).map(r=>({id:r.id,status:r.status,command:r.command,createdAt:r.createdAt}))}));
+app.get("/api/runs/:id",(req,res)=>{const r=runs.get(req.params.id);if(!r)return res.status(404).json({error:"Run não encontrada"});res.json({run:r})});
+
+app.get("/api/reports",(req,res)=>{
+ const reports=[...runs.values()].map(r=>{
+   const stages=Object.values(r.stageResults||{}), completed=stages.filter(x=>x.status==="completed").length;
+   const totalTokens=stages.reduce((n,x)=>n+(x.usage?.total_tokens||0),0);
+   const totalLatencyMs=stages.reduce((n,x)=>n+(x.latencyMs||0),0);
+   return {id:r.id,status:r.status,completedStages:completed,totalStages:4,totalTokens,totalLatencyMs,summary:r.status==="completed"?"As quatro etapas concluíram e o GitHub Simulator recebeu o sinal final.":`Execução encerrada com ${completed}/4 etapas concluídas.`};
+ });
+ res.json({reports});
+});
+app.get("/api/power-rank",(req,res)=>{
+ const map=new Map();
+ for(const r of runs.values())for(const [stage,x] of Object.entries(r.stageResults||{})){
+   if(!x.model)continue;const k=`${x.provider}/${x.model}`;let z=map.get(k)||{provider:x.provider,model:x.model,experiments:0,completedStages:0,stages:0,tokens:0,lat:0};
+   z.experiments++;z.stages++;if(x.status==="completed")z.completedStages++;z.tokens+=x.usage?.total_tokens||0;z.lat+=x.latencyMs||0;map.set(k,z);
+ }
+ const rank=[...map.values()].map(z=>({...z,avgLatencyMs:z.stages?Math.round(z.lat/z.stages):0})).sort((a,b)=>b.completedStages-a.completedStages||a.avgLatencyMs-b.avgLatencyMs);
+ res.json({rank});
+});
+
+const port=process.env.PORT||10000;
+app.listen(port,()=>console.log(`VILTRIX AI LAB 6.0.0 REAL SANDBOX on ${port}`));
