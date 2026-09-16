@@ -1,6 +1,6 @@
 {
   "name": "viltrix-ai-lab-backend",
-  "version": "6.0.0",
+  "version": "6.0.1",
   "type": "module",
   "scripts": {
     "start": "node src/server.mjs"

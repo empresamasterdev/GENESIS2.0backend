@@ -1,15 +1,4 @@
-# VILTRIX AI LAB 6.0.0
+# VILTRIX AI LAB 6.0.1
+Nenhum modelo é fixado pelo LAB. As chaves são cadastradas na extensão, o backend valida/descobre modelos reais e o Sandbox permite montar equipes livremente.
 
-## Conceito
-Laboratório aberto: nenhum modelo é fixado. O usuário cadastra chaves na extensão, o backend identifica/valida o provedor e descobre modelos reais. O usuário forma equipes no Sandbox e testa combinações.
-
-## Backend Render
 Start: `npm start`
-
-Node >=20.
-
-## Fluxo
-CONFIGURAÇÃO DE CHAVES -> DESCOBERTA REAL -> MODELOS -> EQUIPE LIVRE -> NEXUS -> SCOUT -> FORGE -> SENTINEL -> SINAL FINAL -> GITHUB SIMULATOR -> RESULTADOS/TIMELINE/RELATÓRIOS
-
-## Observação
-O GitHub Simulator não altera nenhum repositório real. Ele valida o protocolo do sinal final. Nenhum resultado de IA é fabricado.
