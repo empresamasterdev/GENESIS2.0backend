@@ -1,0 +1,1 @@
+{"name":"genesis-backend","version":"1.0.0","private":true,"type":"module","scripts":{"start":"node src/server.mjs","dev":"node --watch src/server.mjs"},"engines":{"node":">=20"},"dependencies":{"cors":"^2.8.5","express":"^5.1.0","octokit":"^5.0.3"}}
