@@ -1,16 +1,18 @@
-# EXTENSÃO-GENESIS2.0 — Backend
+# GÊNESIS 2.0 — backend OAuth patch
 
-Render-ready backend for the GÊNESIS browser extension.
+Substitua `src/server.mjs` pelo arquivo deste pacote.
 
-Flow: GitHub OAuth → repository context → Key 1 analysis → Key 2 plan → Key 1 execution → GitHub changes → Key 2 audit/report.
+Adicione no Render:
 
-Render:
-- Build: `npm install`
-- Start: `npm start`
-- Health: `/api/health`
+GENESIS_EXTENSION_REDIRECT_URI=https://gipfdbmobkgn...chromiumapp.org/github
 
-After Render creates the service URL, set `GITHUB_REDIRECT_URI` to:
-`https://YOUR-SERVICE.onrender.com/auth/github/callback`
-and use the exact same URL in the GitHub App.
+Use o ID real da extensão instalada. Para a extensão atual mostrada no navegador, o padrão é:
+`https://gipfdbmobkgn...chromiumapp.org/github`
 
-Never commit secrets.
+IMPORTANTE: confirme o ID exibido em chrome://extensions. O valor exato deve ser usado.
+
+O GitHub App continua usando:
+`https://genesis2-0.onrender.com/auth/github/callback`
+
+O fluxo passa a ser:
+GitHub -> Render callback -> código de uso único -> chromiumapp.org -> extensão -> /auth/github/exchange -> token de sessão.
