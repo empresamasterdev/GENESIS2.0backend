@@ -1,6 +1,0 @@
-services:
-  - type: web
-    name: viltrix-ai-lab-backend
-    env: node
-    buildCommand: npm install
-    startCommand: npm start
