@@ -7,7 +7,7 @@ Adicione no Render:
 GENESIS_EXTENSION_REDIRECT_URI=https://gipfdbmobkgn...chromiumapp.org/github
 
 Use o ID real da extensão instalada. Para a extensão atual mostrada no navegador, o padrão é:
-`https://gipfdbmobkgn...chromiumapp.org/github`
+`https://akealbnpdlpcdodpmaokfnobolclbfjk.chromiumapp.org/github`
 
 IMPORTANTE: confirme o ID exibido em chrome://extensions. O valor exato deve ser usado.
 
